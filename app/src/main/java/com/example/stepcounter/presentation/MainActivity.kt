@@ -1,9 +1,17 @@
 
 package com.example.stepcounter.presentation
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresPermission
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -12,61 +20,129 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.navigation.compose.rememberNavController
-import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
-import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
-import androidx.wear.compose.material3.AppScaffold
-import androidx.wear.compose.material3.Button
-import androidx.wear.compose.material3.ButtonDefaults
-import androidx.wear.compose.material3.EdgeButton
-import androidx.wear.compose.material3.ListHeader
-import androidx.wear.compose.material3.MaterialTheme
-import androidx.wear.compose.material3.ScreenScaffold
-import androidx.wear.compose.material3.SurfaceTransformation
-import androidx.wear.compose.material3.Text
-import androidx.wear.compose.material3.lazy.rememberTransformationSpec
-import androidx.wear.compose.material3.lazy.transformedHeight
-import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
-import androidx.wear.compose.ui.tooling.preview.WearPreviewFontScales
-import com.example.stepcounter.R
-import com.example.stepcounter.presentation.theme.StepCounterTheme
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.wear.compose.material3.Button
+import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.Text
+import com.example.stepcounter.presentation.theme.StepCounterTheme
+import java.util.jar.Manifest
+
+const val CHANNEL_ID = "fitness_alerts"
+const val HEART_RATE_NOTIFICATION_ID = 1
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+
         super.onCreate(savedInstanceState)
+
+        createNotificationChannel(this)
+
         setContent {
             StepCounterTheme {
                 WearFitnessApp()
             }
         }
     }
+
+    private fun createNotificationChannel(context: Context){
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Fitness Alerts",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Heart-rate and activity reminders"
+        }
+
+        val notificationManager = context.getSystemService(NotificationManager::class.java)
+        notificationManager.createNotificationChannel(channel)
+    }
 }
 
 @Composable
 fun WearFitnessApp() {
     val navController = rememberNavController()
+    val contest = LocalContext.current
 
     var steps by remember { mutableIntStateOf(0) }
     var stepsGoal by remember { mutableIntStateOf(10000) }
     var calories by remember { mutableIntStateOf(0) }
     var caloriesGoal by remember { mutableIntStateOf(500) }
+    var heartRate by remember { mutableIntStateOf(72) }
+
+    var heartRateNotificationSent by remember { mutableStateOf(false) }
+    var notificationPermissionGranted by remember { mutableStateOf(
+        Build.VERSION.SDK_INT <
+                Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                    ) == PackageManager.PERMISSION_GRANTED
+    ) }
+
+    val notificationPermissionLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission(),
+        ){
+            isGranted -> notificationPermissionGranted = isGranted
+        }
+
+    LaunchedEffect(Unit){
+        if (
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.TIRAMISU &&
+            !notificationPermissionGranted
+        ){
+            notificationPermissionLauncher.launch(
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+        }
+    }
+
+    LaunchedEffect(
+        heartRate,
+        notificationPermissionGranted
+    ){
+        if (
+            heartRate >= 100 &&
+            !heartRateNotificationSent &&
+            notificationPermissionGranted
+        ) {
+        showNotification(
+            context = context,
+            notificationId = HEART_RATE_NOTIFICATION_ID,
+            title = "High Heart Rate Detected",
+            message = "Your heart rate reached $heartRate BPM"
+        )
+
+            heartRateNotificationSent = true
+        }
+
+        if (heartRate < 100) {
+            heartRateNotificationSent = false
+        }
+
+    }
 
     SwipeNavigationController(navController = navController) {
         NavHost(
@@ -87,7 +163,11 @@ fun WearFitnessApp() {
             }
 
             composable("heart") {
-                HeartRateScreen()
+                HeartRateScreen(
+                    heartRate = heartRate,
+                    onDecreaseHeartRate = { heartRate-- },
+                    onIncreaseHeartRate = { heartRate++ }
+                )
             }
 
             composable("goals") {
@@ -274,7 +354,11 @@ fun WearFitnessApp() {
     }
 
     @Composable
-    fun HeartRateScreen() {
+    fun HeartRateScreen(
+        heartRate: Int,
+        onDecreaseHeartRate: () -> Unit,
+        onIncreaseHeartRate: () -> Unit
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -290,11 +374,25 @@ fun WearFitnessApp() {
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "72 BP<",
+                text = "$heartRate BPM",
                 color = Color.White,
                 style = MaterialTheme.typography.displayMedium
             )
             Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Button(onClick = onDecreaseHeartRate) {
+                    Text("-")
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Button(onClick = onIncreaseHeartRate) {
+                    Text("+")
+                }
+            }
 
             Text(
                 text = "Swipe ->",
@@ -304,4 +402,40 @@ fun WearFitnessApp() {
         }
     }
 
+@RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
+fun showNotification(
+    context: Context,
+    notificationId: Int,
+    title: String,
+    message: String
+){
+    if (Build.VERSION.SDK_INT >=
+        Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(
+            context,
+        Manifest.permission.POST_NOTIFICATIONS
+        ) != PackageManager.PERMISSION_GRANTED
+    ){
+        return
+    }
 
+    val notification = NotificationCompat.Builder(
+        context,
+        CHANNEL_ID
+    ).setSmallIcon(
+        android.R.drawable.
+        ic_dialog_info
+    ).setContentTitle(title)
+        .setContentText(message)
+        .setPriority(
+            NotificationCompat.PRIORITY_DEFAULT)
+        .setAutoCancel(true)
+        .build()
+
+    NotificationManagerCompat
+        .from(context)
+        .notify(
+            notificationId,
+            notification
+        )
+}
